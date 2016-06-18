@@ -1,126 +1,158 @@
-// Should really have a struct that configures the things which can be stored, and then implement
-// IntoIter for it, which would return what I've got implemented here
+use std::fmt;
+use std::fmt::Debug;
 
-//pub struct Backoff
-
-// -------------------- and now the iter bits
-
-pub trait BackoffCalculator {
-    fn value(&mut self, iteration: u64) -> Option<u64>;
-}
-
-pub struct BackoffSequenceIter<C>
-    where C: BackoffCalculator
-{
-    calculator: C,
-    
-    iteration: u64,
+#[derive(Clone, Copy)]
+pub struct BackoffSequence<'a, F: 'a, B> {
     max_iterations: Option<u64>,
+    min_value: Option<B>,
+    max_value: Option<B>,
+    calculator: &'a F,
 }
 
-impl<C> BackoffSequenceIter<C>
-    where C: BackoffCalculator
+impl<'a, F, B> Debug for BackoffSequence<'a, F, B>
+    where B: Debug
 {
-    pub fn new(calculator: C, max_iterations: Option<u64>) -> Self {
-        BackoffSequenceIter {
-            calculator: calculator,
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "mi: {:?}, mv: {:?}", self.max_iterations, self.max_value)
+    }
+}
+
+impl<'a, F, B> BackoffSequence<'a, F, B>
+    where F: Fn(u64) -> B,
+          B: PartialOrd + Clone + Debug
+{
+    pub fn new(f: &'a F) -> Self {
+        BackoffSequence {
+            calculator: f,
+            max_iterations: None,
+            min_value: None,
+            max_value: None,
+        }
+    }
+
+    pub fn max_iterations(&mut self, x: u64) -> &mut Self {
+        self.max_iterations = Some(x);
+        self
+    }
+
+    pub fn min(&mut self, x: B) -> &mut Self {
+        self.min_value = Some(x);
+        self
+    }
+
+    pub fn max(&mut self, x: B) -> &mut Self {
+        self.max_value = Some(x);
+        self
+    }
+
+    pub fn iter(&self) -> BackoffSequenceIterator<F, B> {
+        BackoffSequenceIterator {
             iteration: 0,
-            max_iterations: max_iterations,
+            max_iterations: self.max_iterations,
+            calculator: self.calculator,
+            current_value: None,
+            max_value: self.max_value.clone(),
+            min_value: self.min_value.clone(),
         }
     }
 }
 
-impl<C> Iterator for BackoffSequenceIter<C>
-    where C: BackoffCalculator
-{
-    type Item = u64;
+// Don't impl this one, it moves the BackoffSequence
+// impl<'a, F, B> IntoIterator for BackoffSequence<'a, F: Fn(u64) -> B, B>
 
-    fn next(&mut self) -> Option<u64> {
+impl<'a, F, B> IntoIterator for &'a BackoffSequence<'a, F, B>
+    where F: Fn(u64) -> B,
+          B: PartialOrd + Clone + Debug
+{
+    type Item = B;
+    type IntoIter = BackoffSequenceIterator<'a, F, B>;
+    // TODO make this able to return any of a set of iterators in this module, so that I can go for
+    // a basic unbounded iterator with very little state or logic, and then adapt it with functions
+    // to do things like clamp the value or limit iterations or whatever
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+pub struct BackoffSequenceIterator<'a, F: 'a, B> {
+    calculator: &'a F,
+
+    iteration: u64,
+    max_iterations: Option<u64>,
+    current_value: Option<B>,
+    min_value: Option<B>,
+    max_value: Option<B>,
+}
+
+impl<'a, F, B> Debug for BackoffSequenceIterator<'a, F, B>
+    where B: Debug
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f,
+               "i: {:?}, mi: {:?}, cur: {:?}, min: {:?}, max: {:?}",
+               self.iteration,
+               self.max_iterations,
+               self.current_value,
+               self.min_value,
+               self.max_value)
+    }
+}
+
+impl<'a, F, B> Iterator for BackoffSequenceIterator<'a, F, B>
+    where F: Fn(u64) -> B,
+          B: PartialOrd + Clone + Debug
+{
+    type Item = B;
+
+    fn next(&mut self) -> Option<Self::Item> {
         if let Some(mi) = self.max_iterations {
             if self.iteration >= mi {
                 return None;
             }
         }
-        
+
         self.iteration += 1;
-        self.calculator.value(self.iteration)
-    }
-}
 
-pub struct Exponential {
-    base: u64,
-}
-
-impl Exponential {
-    pub fn new(base: u64) -> Self {
-        Exponential { base: base }
-    }
-
-    pub fn new_binary() -> Self {
-        Exponential { base: 2 }
-    }
-}
-
-impl BackoffCalculator for Exponential {
-    fn value(&mut self, iteration: u64) -> Option<u64> {
-        Some(self.base.pow(iteration as u32) - 1)
-    }
-}
-
-pub struct Geometric {
-    factor: u64
-}
-
-impl Geometric {
-    pub fn new(factor: u64) -> Self {
-        Geometric { factor: factor }
-    }
-}
-
-impl BackoffCalculator for Geometric {
-    fn value(&mut self, iteration: u64) -> Option<u64> {
-        Some(self.factor * iteration)
-    }
-}
-
-pub struct Clamped<T> 
-    where T: BackoffCalculator
-{
-    calculator: T,
-    current_value: u64,
-    max_value: u64,
-}
-
-impl<T> Clamped<T> 
-    where T: BackoffCalculator
-{
-    pub fn new(calculator: T, max_value: u64) -> Self {
-        Clamped { calculator: calculator, current_value: 0, max_value: max_value }
-    }
-}
-
-impl<T> BackoffCalculator for Clamped<T> 
-    where T: BackoffCalculator
-{
-    fn value(&mut self, iteration: u64) -> Option<u64> {
-        // check max value prior to calculations, to avoid integer overflow 
-        if self.current_value >= self.max_value {
-            return Some(self.max_value);
+        // check max value prior to calculations, to avoid integer overflow
+        match (&self.current_value, &self.max_value) {
+            (&Some(ref cur), &Some(ref max)) if *cur >= *max => return self.max_value.clone(),
+            _ => (),
         }
-        
-        if let Some(val) = self.calculator.value(iteration) {
-            self.current_value = val;
-        } else {
-            return None;
+
+        let mut new_value = Some((self.calculator)(self.iteration));
+
+        // if the value is less than the minimum, advance the iterator until the value is >= the
+        // minimum, and increase the max iterations (if required) by the corresponding #
+        if self.min_value.is_some() {
+            let min = self.min_value.clone().unwrap();
+            let mut cur = new_value.clone().unwrap();
+            let mut iter = self.iteration;
+
+            while cur < min {
+                iter += 1;
+                cur = (self.calculator)(iter);
+            }
+
+            if let Some(mi) = self.max_iterations {
+                self.max_iterations = Some(mi + (iter - self.iteration));
+            }
+
+            self.iteration = iter;
+            new_value = Some(cur);
+
+            self.min_value = None;
         }
-        
-        // now check to see if the newly calculated one is over the limit and clamp 
-        // the current value and return value
-        if self.current_value >= self.max_value {
-            self.current_value = self.max_value;
-        }
-        
-        Some(self.current_value)
+
+        self.current_value = match (&new_value, &self.max_value) {
+            //            (None, _) => return None,
+            //            (_, None) => self.current_value,
+            // (&Some(ref c), &Some(ref m)) if *c <= *m => new_value.clone(),
+            (&Some(ref new), &Some(ref max)) if *new > *max => self.max_value.clone(),
+            _ => new_value.clone(),
+        };
+
+        self.current_value.clone()
     }
 }
 
@@ -128,53 +160,132 @@ impl<T> BackoffCalculator for Clamped<T>
 mod tests {
     use super::*;
 
-    struct N { }
-    impl BackoffCalculator for N {
-        fn value(&mut self, _iteration: u64) -> Option<u64> { Some(0) }
+    fn double(x: u64) -> u64 {
+        x * 2
+    }
+
+    fn base_2_exp_calculator(x: u64) -> u64 {
+        2u64.pow(x as u32) - 1
+    }
+
+    #[test]
+    fn new_builder_with_function_ptr() {
+        let f = &base_2_exp_calculator;
+        let mut _x = BackoffSequence::new(f);
+    }
+
+    #[test]
+    fn new_builder_with_closure_ptr() {
+        let f = &|x| 2u64.pow(x as u32);
+        let mut _x = BackoffSequence::new(&f);
+    }
+
+    #[test]
+    fn new_builder_one_opt() {
+        let f = &base_2_exp_calculator;
+        let mut x = BackoffSequence::new(f);
+        x.min(5);
+    }
+
+    #[test]
+    fn new_builder_all_opt() {
+        let f = &base_2_exp_calculator;
+        let mut x = BackoffSequence::new(f);
+        x.min(5).max(1500).max_iterations(500);
+    }
+
+    #[test]
+    fn new_builder_duration() {
+        use std::time::Duration;
+        let f = &|x| Duration::new(0, 2u32.pow(x as u32));
+
+        let mut x = BackoffSequence::new(f);
+        x.min(Duration::new(0, 5)).max(Duration::new(0, 1500)).max_iterations(500);
     }
 
     #[test]
     fn max_iters_0() {
-        assert_eq!(0, BackoffSequenceIter::new(N{}, Some(0)).collect::<Vec<_>>().len());
+        let f = &|_| 0;
+        let mut x = BackoffSequence::new(f);
+        x.max_iterations(0);
+        assert_eq!(0, x.into_iter().collect::<Vec<_>>().len());
     }
 
     #[test]
     fn max_iters_1() {
-        assert_eq!(1, BackoffSequenceIter::new(N{}, Some(1)).collect::<Vec<_>>().len());
+        let f = &|_| 0;
+        let mut x = BackoffSequence::new(f);
+        x.max_iterations(1);
+        assert_eq!(1, x.into_iter().collect::<Vec<_>>().len());
     }
 
     #[test]
     fn max_iters_1000() {
-        assert_eq!(1000, BackoffSequenceIter::new(N{}, Some(1000)).collect::<Vec<_>>().len());
+        let f = &|_| 0;
+        let mut x = BackoffSequence::new(f);
+        x.max_iterations(1000);
+        assert_eq!(1000, x.into_iter().collect::<Vec<_>>().len());
     }
 
     #[test]
     #[should_panic(expected = "arithmetic operation overflowed")]
-    fn unbounded() {
-        for _ in BackoffSequenceIter::new(Exponential::new(2), None) { }
+    fn unbounded_for_loop() {
+        let f = &base_2_exp_calculator;
+        for _ in &BackoffSequence::new(f) {
+        }
     }
 
     #[test]
     fn exponential() {
-        let v = BackoffSequenceIter::new(Exponential::new_binary(), Some(15)).collect::<Vec<_>>();
-        assert_eq!(v, vec![1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, 2047, 4095, 8191, 16383, 32767]);
-    }
-
-    #[test]
-    fn geometric_factor_2() {
-        let v = BackoffSequenceIter::new(Geometric::new(2), Some(10)).collect::<Vec<_>>();
-        assert_eq!(v, vec![2, 4, 6, 8, 10, 12, 14, 16, 18, 20]);
-    }
-
-    #[test]
-    fn geometric_factor_10() {
-        let v = BackoffSequenceIter::new(Geometric::new(10), Some(10)).collect::<Vec<_>>();
-        assert_eq!(v, vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+        let f = &base_2_exp_calculator;
+        let v = BackoffSequence::new(f).max_iterations(15).into_iter().collect::<Vec<_>>();
+        assert_eq!(v,
+                   vec![1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, 2047, 4095, 8191, 16383, 32767]);
     }
 
     #[test]
     fn clamped() {
-        let v = BackoffSequenceIter::new(Clamped::new(Exponential::new(10), 150), Some(4)).collect::<Vec<_>>();
+        let f = &|x| 10u64.pow(x as u32) - 1;
+        let v = BackoffSequence::new(f)
+            .max_iterations(4)
+            .max(150)
+            .into_iter()
+            .collect::<Vec<_>>();
         assert_eq!(v, vec![9, 99, 150, 150]);
+    }
+
+    #[test]
+    fn min_value() {
+        let f = &|x| 10u64.pow(x as u32) - 1;
+        let v = BackoffSequence::new(f)
+            .max_iterations(4)
+            .min(10)
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(v, vec![99, 999, 9999, 99999]);
+    }
+
+    #[test]
+    fn min_and_max_value() {
+        let f = &|x| 10u64.pow(x as u32) - 1;
+        let v = BackoffSequence::new(f)
+            .max_iterations(4)
+            .min(10)
+            .max(10000)
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(v, vec![99, 999, 9999, 10000]);
+    }
+
+    #[test]
+    fn min_greater_than_max() {
+        let f = &|x| 10u64.pow(x as u32) - 1;
+        let v = BackoffSequence::new(f)
+            .max_iterations(4)
+            .min(10000)
+            .max(100)
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(v, vec![100, 100, 100, 100]);
     }
 }
