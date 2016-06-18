@@ -1,5 +1,5 @@
 [package]
-name = "exponential_backoff"
+name = "backoff_sequence"
 version = "0.1.0"
 authors = ["Austin Henry <ahenry@twocanoe.ca>"]
 
