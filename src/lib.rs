@@ -160,6 +160,7 @@ impl<'a, F, B> Iterator for BackoffSequenceIterator<'a, F, B>
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn double(x: u64) -> u64 {
         x * 2
     }
