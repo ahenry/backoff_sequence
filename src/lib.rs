@@ -1,7 +1,7 @@
 use std::fmt;
 use std::fmt::Debug;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct BackoffSequence<'a, F: 'a, B> {
     max_iterations: Option<u64>,
     min_value: Option<B>,
