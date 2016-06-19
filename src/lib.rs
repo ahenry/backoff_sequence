@@ -159,6 +159,8 @@ impl<'a, F, B> Iterator for BackoffSequenceIterator<'a, F, B>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread::sleep;
+    use std::time::Duration;
 
     #[allow(dead_code)]
     fn double(x: u64) -> u64 {
@@ -288,5 +290,41 @@ mod tests {
             .into_iter()
             .collect::<Vec<_>>();
         assert_eq!(v, vec![100, 100, 100, 100]);
+    }
+
+    #[test]
+    fn durations() {
+        let f = &|i| Duration::from_millis(2u64.pow(i as u32));
+        let mut backoff = BackoffSequence::new(f);
+        backoff.max(Duration::from_millis(100)).max_iterations(4);
+
+        for delay in &backoff {
+            sleep(delay);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn manual_iter_next() {
+        use std::net::TcpStream;
+
+        let f = &|i| Duration::from_millis(2u64.pow(i as u32));
+        let mut backoff = BackoffSequence::new(f);
+        backoff.max(Duration::from_millis(100));
+
+        // .. do stuff ..
+
+        let mut delay = backoff.iter();
+        loop {
+            let conn = TcpStream::connect("127.0.0.1:8000");
+            match conn {
+                Ok(_) => break,
+                Err(_) => {
+                    let d = delay.next().unwrap();
+                    println!("{:?}", d);
+                    sleep(d);
+                },
+            }
+        }
     }
 }
