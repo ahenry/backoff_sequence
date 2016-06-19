@@ -19,7 +19,7 @@ impl<'a, F, B> Debug for BackoffSequence<'a, F, B>
 
 impl<'a, F, B> BackoffSequence<'a, F, B>
     where F: Fn(u64) -> B,
-          B: PartialOrd + Clone + Debug
+          B: PartialOrd + Clone
 {
     pub fn new(f: &'a F) -> Self {
         BackoffSequence {
@@ -62,7 +62,7 @@ impl<'a, F, B> BackoffSequence<'a, F, B>
 
 impl<'a, F, B> IntoIterator for &'a BackoffSequence<'a, F, B>
     where F: Fn(u64) -> B,
-          B: PartialOrd + Clone + Debug
+          B: PartialOrd + Clone
 {
     type Item = B;
     type IntoIter = BackoffSequenceIterator<'a, F, B>;
@@ -101,7 +101,7 @@ impl<'a, F, B> Debug for BackoffSequenceIterator<'a, F, B>
 
 impl<'a, F, B> Iterator for BackoffSequenceIterator<'a, F, B>
     where F: Fn(u64) -> B,
-          B: PartialOrd + Clone + Debug
+          B: PartialOrd + Clone
 {
     type Item = B;
 
